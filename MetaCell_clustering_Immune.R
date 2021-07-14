@@ -28,7 +28,7 @@ saveRDS(object = seurat_data, "./misc_data/seurat.immune.rds")
 mat <- scdb_mat("QPCTL_exp_all")
 
 # Import gene-modules gene-set
-feats_gset <- scdb_gset("All_corr_diff_genes")
+gene.clusters <- scdb_gset("All_corr_diff_genes")
 
 
 # Switch to new directory devoted to Immune cell analysis
@@ -78,7 +78,6 @@ length(names(feats_gset@gene_set))
 mcell_plot_gstats(gstat_id = "QPCTL_Imm_gs", "QPCTL_Imm_feats")
 
 # Set cell cycle and ribosomal proteins to lateral
-gene.clusters <- scdb_gset("All_corr_diff_genes")
 to.lateral <- names(gene.clusters@gene_set[gene.clusters@gene_set %in% c(20, 2,7)])
 test <- rep(1, length(to.lateral))
 names(test) <- to.lateral
