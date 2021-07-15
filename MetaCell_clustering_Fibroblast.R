@@ -23,7 +23,7 @@ Fibr <- names(mc@mc[mc@mc %in% c(85:88)])
 seurat_data <- readRDS("./misc_data/seurat_object.rds")
 
 # Subset on Immune cells and save object
-seurat_data <- SubsetData(seurat_data, cells = Fibr)
+seurat_data <- subset(seurat_data, cells = Fibr)
 saveRDS(object = seurat_data, "./misc_data/seurat.Fibr.rds")
 
 # Import mat object
