@@ -21,7 +21,7 @@ Imm <- names(mc@mc[mc@mc %in% c(73:76, 77:83, 89)])
 seurat_data <- readRDS("./misc_data/seurat_object.rds")
 
 # Subset on Immune cells and save object
-seurat_data <- SubsetData(seurat_data, cells = Imm)
+seurat_data <- subset(seurat_data, cells = Imm)
 saveRDS(object = seurat_data, "./misc_data/seurat.immune.rds")
 
 # Import mat object
