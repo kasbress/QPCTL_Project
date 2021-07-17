@@ -1,6 +1,6 @@
 library(metacell)
-library(pheatmap)
-library(ggplot2)
+library(Seurat)
+library(tidyverse)
 
 # Set working directory 
 setwd("/DATA/users/k.bresser/scRNAseq_QPCTL/Analysis/")
