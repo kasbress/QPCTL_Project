@@ -116,4 +116,7 @@ pheatmap(highly_variable_genes, scale = "row",breaks = seq(-1.5,1.5,by=0.03),
          border_color = NA, cutree_rows = 4, annotation_row = gene_cluster)
 dev.off()
 
-
+# Write out gene-clusters
+gene_cluster %>% 
+  rownames_to_column("gene") %>% 
+  write_tsv("./gene_clusters_CD45neg.tsv")
