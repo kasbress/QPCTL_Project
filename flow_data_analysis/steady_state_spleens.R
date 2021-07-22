@@ -102,7 +102,7 @@ ggplot(aes(x = cluster, y = n))+
   stat_summary(color = "black", geom = "errorbar", fun.data = "mean_se", 
                size = 0.4,width = 0.4, position = position_dodge(.9), 
                aes(group = genotype) )+
-  stat_pvalue_manual(data = stat.test,  label = "p.adj", 
+  stat_pvalue_manual(data = stat.test,  label = "p", 
                      tip.length = 0.01,hide.ns = F, label.size = 4 )+
   scale_fill_manual(values=c("#1B76BD", "#A51E23"))+
   theme_classic()
