@@ -10,4 +10,7 @@ analysis:
 Contains R scripts used to produce key panels for the scRNAseq figure.
 
 bulkRNA_analysis:
-Contains R scripts used to produce the panels for the bulkRNAseq figures
+Contains R scripts used to produce the panels for the bulkRNAseq figures.
+
+flow_data_analysis:
+Contains R scripts used to perform the unbiased clustering analysis of the flow-cytometric data.
