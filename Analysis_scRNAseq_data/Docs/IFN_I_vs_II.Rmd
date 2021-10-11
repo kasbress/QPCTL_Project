@@ -1,0 +1,202 @@
+---
+title: "Compare IFN type I vs type II"
+author: "Kaspar Bresser"
+date: "11/10/2021"
+output: 
+#  github_document:
+#    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+In the bulk and scRNAseq analysis of QPCTL WT and KO mice we detected a enhanced IFN response signature in tumors in a completely KO setting. One of the Referee's asked if this signature was the result of type I or type II signalling. To figure out whether we can demonstrate this I took 2 approaches, (1) Using the [CytoSig](https://cytosig.ccr.cancer.gov/) database and (2) using the [Interferome](http://www.interferome.org/interferome/home.jspx) database. 
+
+```{r loading}
+library(here)
+library(metacell)
+library(rstatix)
+library(GGally)
+library(biomaRt)
+library(tidyverse)
+```
+
+# CytoSig analysis
+
+## Import and tidy
+
+Import the cytosig dataset. Each column represents a cytokine treatment experiment on a cell model under certain conditions. Each row represents a target gene. Each value is a log2 fold change between treatment and control conditions. 
+
+
+```{r import_cytosig}
+cytosig.data <- read_tsv(here("Data", "Cytosig", "diff.merge"))
+
+cytosig.data
+```
+
+Select only to columns that relate to our cytokines of interest, switch to long form, and extract cytokine identity into a separate column. 
+
+```{r tidy_data}
+cytosig.data %>% 
+  select(Gene, contains("IFNA"), contains("IFNB"), contains("IFNG")) %>% 
+  pivot_longer(cols = -Gene, names_to = "assay", values_to = "FC") %>% 
+  mutate(cytokine = str_extract(assay, "^IFN\\w{1}")) -> cytosig.IFN
+
+cytosig.IFN
+```
+
+## Calculate scores
+
+Remove any `NA`'s that were formed, as some genes were probably not detected in each assay. Then calculate the median log2 FC. Probably not the ideal metric, but should give us a rough idea of the association between gene-induction and IFN subtype. 
+
+```{r caluclate_scores}
+cytosig.IFN %>% 
+  na.omit() %>% 
+  group_by(Gene, cytokine) %>% 
+  summarise(score = median(FC, na.rm = T)) %>% 
+  pivot_wider(names_from = cytokine, values_from = score) -> cytosig.IFN
+
+cytosig.IFN
+```
+
+
+Lets have a look at the correlations between these signatures. 
+
+```{r correlations}
+ggpairs(cytosig.IFN, columns = c("IFNA", "IFNB", "IFNG"))
+```
+
+## Map mouse to human gene symbols
+
+The CytoSig database was constructed based on human data, our data is a mouse data-set, can use `biomaRt` to map these to each other, af far as possible. 
+
+Retrieve the mouse gene symbols. 
+
+```{r get_symbols, cache=TRUE}
+human <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+mouse <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+conversion <- getLDS(attributes = c("hgnc_symbol"), 
+                     filters = "hgnc_symbol", 
+                     values = cytosig.IFN$Gene , 
+                     mart = human, 
+                     attributesL = c("mgi_symbol"), 
+                     martL = mouse, 
+                     uniqueRows=T)
+
+tail(conversion, 10)
+```
+
+
+Now import the tumor data.
+
+```{r import_tumor}
+scdb_init(here("Data", "Metacell_files"), force_reinit=T)
+mc.tumor <- scdb_mc("QPCTL_Tum_MC2")
+
+lfp <- as_tibble(log2(mc.tumor@mc_fp), rownames = "Gene" )
+```
+
+MetaCell 12 was the cell cluster that exhibited an enhanced IFN signature.
+
+Join with conversion table and with cytosig data.
+
+```{r combine_sets}
+lfp %>% 
+  rename(MC12 = `12`) %>% 
+  dplyr::select(Gene, MC12) %>% 
+  inner_join(conversion, c("Gene" = "MGI.symbol")) %>% 
+  inner_join(cytosig.IFN, c("HGNC.symbol" = "Gene")) -> combined.data
+```
+
+## Compare signatures
+
+Check the correlations.
+
+```{r correlations2}
+ggpairs(combined.data, columns = c("IFNA", "IFNB", "IFNG", "MC12"), )
+```
+
+
+Gene-enrichment in MC12 does not seem to have a stronger correlation with any of the signatures. 
+
+Another way of looking at the data could be to zoom in on the top 100 enriched genes in MC12 and plot the score distribution for each of the signatures.
+
+```{r plot_sig, fig.asp=.8}
+combined.data %>% 
+  slice_max(order_by = MC12, n = 100) %>% 
+  pivot_longer(cols = contains("IFN"), names_to = "type", values_to = "score") %>% 
+  t_test(score~type)
+
+combined.data %>% 
+  slice_max(order_by = MC12, n = 100) %>% 
+  pivot_longer(cols = contains("IFN"), names_to = "type", values_to = "score") %>% 
+  ggplot(aes(type, score, fill = type))+
+  geom_violin(scale = "width")+
+  geom_boxplot(color = "black", width = .1, fill = NA)
+```
+
+
+# Interferome analysis
+
+The interferome database allows one to search a list of genes, returning information on a curated set of studies that examined transcriptional signatures in response to type I, II or III IFNs. I'll extract the top 100 genes in MC12 and examine whether these genes have been found to be induced by type I or II IFNs. 
+
+```{r get_top}
+combined.data %>% 
+  slice_max(order_by = MC12, n = 100) %>% 
+  pull(Gene) %>% 
+  write_lines(here("Output", "MC12_genes.txt"))
+```
+
+
+I used the created file as input for [Interferome](http://www.interferome.org/interferome/home.jspx), the first lines contain information on the search metrics, actual data starts on line 20. 
+
+```{r import_IRF_results}
+search.info <- read_lines(here("Data", " Interferome_top100_results.txt"), n_max = 19)
+cat(paste0(search.info, collapse = "\n"))
+
+IRF.results <- read_tsv(here("Data", " Interferome_top100_results.txt"), skip = 19 )
+IRF.results
+```
+
+Transform data a bit to figure out whether genes were found in studies using either type I, type II or both.
+
+```{r plot_counts}
+
+IRF.results %>% 
+  count(`Gene Name`, `Inteferome Type`) %>% 
+  pivot_wider(names_from = "Inteferome Type", values_from = n, values_fill =  0) %>% 
+  mutate(IFN.type = case_when(I == 0 ~ "type II",
+                              II == 0 ~ "type I",
+                              TRUE ~ "both")) -> IRF.genes 
+
+IRF.genes
+```
+
+Plot the counts
+
+```{r plot_dist, fig.asp=.9}
+ggplot(IRF.genes, aes(IFN.type, fill = IFN.type))+
+  geom_bar(stat="count")+
+  geom_text(stat="count", aes(label=..count..), vjust=-0.2)+
+  labs(x = "IFN subtype", y = "number of genes")
+```
+
+
