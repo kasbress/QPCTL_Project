@@ -1,0 +1,233 @@
+---
+title: "Analysis flow cytometry data - spleens at steady-state"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+Below the unbiased flow analysis of spleen samples from QPCTL-WT and QPCTL-KO mice. 
+
+Import the necessary packages
+
+
+```{r loading, echo=FALSE}
+library(flowCore)
+library(flowSpecs)
+library(tidyverse)
+library(umap)
+library(ggpubr)
+library(rstatix)
+library(here)
+```
+
+
+## Import and prep data
+
+Read in the fcs files using the [flowCore](https://bioconductor.org/packages/release/bioc/html/flowCore.html) package.
+
+```{r import_fcs, warning=FALSE}
+fset <- read.flowSet( path = here("Data", "spleen") )
+
+fset
+```
+
+Down-sample to 1000 cells from each file.
+
+```{r downsample_files}
+set.seed(667)
+
+dsFilt <- sampleFilter(size = 1000, filterId="dsFilter")
+filter.result <- flowCore::filter(fset, dsFilt)
+fset <- Subset(fset, filter.result)
+```
+
+We'll perform a logicle transformation to the fluorescence channels. We can use 1 sample to calculate the transformation, and then apply it to all the rest. 
+
+```{r transform}
+toTrans <- as.character(grep(pattern = "FJ", x = colnames(fset), value = T ))
+toTrans
+
+lgcl <- estimateLogicle(fset@frames$`export_20191014 Phenotyping QPCTL KO_M8_Spleen_CD45+.fcs`, channels =  toTrans)
+trans.fset <- transform(fset, lgcl)
+```
+
+Finally, extract to a long dataframe. Use idInfo argument extracts shorthand sample name from fcs file name, see documentation for details.
+Also, add a cell_id column.
+
+```{r make_dataframe}
+trans.fset %>%  
+  flowSet2LongDf( idInfo = list("Sample" = "export_20191014 Phenotyping QPCTL KO_|_Spleen_CD45\\+\\.fcs")) %>% 
+  rownames_to_column("cell_id") %>% 
+  as_tibble() -> flow.data
+
+flow.data
+```
+
+And save dataframe for later use.
+
+```{r write_data}
+write_tsv(flow.data, here("Output", "spleen_data.tsv"))
+```
+
+## UMAP
+
+Lets subset the data for the markers that we want to use for the UMAP.
+
+First get the markers available in the dataset
+
+
+```{r get_marks}
+trans.fset@frames$`export_20191014 Phenotyping QPCTL KO_M10_Spleen_CD45+.fcs`@parameters@data %>% 
+  na.omit() %>% 
+  pull(desc) -> markers
+
+markers
+```
+
+Then select markers, drop other columns, and rename according to proteins
+
+```{r select_marks}
+flow.data %>% 
+  dplyr::select(starts_with("FJ"), Sample, cell_id ) %>% 
+  dplyr::select(-c(5,11)) %>% # drop channels that were not used
+  setNames(., c(markers, "Sample", "cell_id")) %>% # rename columns 
+  dplyr::select(!one_of("CD45", "7AAD")) -> flow.data # drop irrelevant markers
+
+flow.data
+```
+
+Now we can perform the UMAP, and extract the coordinates as a dataframe. 
+
+```{r umap}
+set.seed(667)
+
+reducU <- umap::umap(flow.data[1:11])
+
+umap_plot_df <- as_tibble(data.frame(reducU$layout))
+
+umap_plot_df
+```
+
+Now use those coordinates to perform hierarchical clustering. 
+
+```{r clustering}
+hc.norm = hclust(dist(umap_plot_df), method = "ward.D")
+```
+
+Add a 'cluster' column to the flow data, cutting the tree at 10 clusters. 
+
+```{r add_clusters}
+flow.data$cluster = factor(cutree(hc.norm, 10))
+```
+
+Add the coordinates to the flow data and plot the clusters
+
+```{r plot_UMAP, fig.asp=.8}
+flow.data %>% 
+  bind_cols(umap_plot_df) %>% 
+    ggplot( aes( x = X1, y = X2, color = cluster)) +
+      geom_point(size = 0.2) + 
+      guides(color = guide_legend(override.aes = list(size = 4)))+
+      theme_classic()+
+      labs(x = "UMAP1", y = "UMAP2")
+
+ggsave( here("Figs", "Spleen_UMAP_clust.pdf"), width = 4.5, height = 4)
+```
+
+Plot the marker expression per cluster. 
+
+```{r plot_marks, fig.width=14, fig.asp=.3}
+flow.data %>% 
+  gather("marker", "FI", -c(Sample, cluster, cell_id)) %>% 
+    ggplot( aes(x = as.factor(cluster), y = FI, fill = as.factor(cluster)))+
+      geom_violin()+
+      facet_wrap(~marker, scales = "free_y", nrow = 2)+
+      theme_classic()
+
+ggsave(here("Figs", "Spleen_Violin_phenotypes.pdf"), width = 160, height = 40, units = "mm", scale = 2.5)
+
+flow.data %>% 
+  bind_cols(umap_plot_df) %>%
+  gather("marker", "FI", -c(Sample, cluster, cell_id, X1, X2)) %>% 
+  rename(UMAP1 = "X1", UMAP2 = "X2") %>% 
+  write_tsv(here("Output", "Spleen_marker_expression_clusters.tsv"))
+```
+
+
+## Compare cluster frequencies
+
+Next we can compare the cell counts of each sample to see if any phenotypes are enriched in WT or KO mice. 
+
+Start off with counting cells in each cluster and add a genotype column.
+
+
+```{r count_cells}
+## Calculate statistics for the WT and KO cells in each cluster
+flow.data %>% 
+  count(cluster, Sample ) %>% # count amount of cells from each sample per cluster
+  mutate(genotype = factor(case_when(Sample %in% c('M4', 'M5', 'M6_spleen_CD45+.fcs', 'M8', 'M10') ~ "WT",
+                                     TRUE ~ "KO"), levels = c('WT', 'KO') ) ) -> cell.counts
+
+cell.counts
+```
+
+
+Then calculate statistics. Perform a T test and add bonferroni correction
+
+
+```{r check_significance}
+cell.counts %>% 
+  group_by(cluster) %>% # we want to test per cluster
+  t_test(n ~ genotype ) %>%
+  adjust_pvalue(method = "bonferroni") %>%
+  add_significance("p.adj") %>% 
+  add_xy_position(fun = "mean_se", x = "cluster", dodge = 0.8) %>% # x-position has to dodge around cluster
+  mutate(p.adj = round(p.adj, 4))  -> stat.test
+
+stat.test
+```
+
+And visualize as bar chart. 
+
+```{r plot_counts, fig.width=8, fig.asp=.5}
+ggplot(cell.counts, aes(x = cluster, y = n))+ 
+  geom_bar(position = "dodge", stat = "summary", fun = "mean", aes(fill = genotype))+
+  stat_summary(color = "black", geom = "errorbar", fun.data = "mean_se", 
+               size = 0.4,width = 0.4, position = position_dodge(.9), 
+               aes(group = genotype) )+
+  stat_pvalue_manual(data = stat.test,  label = "p", 
+                     tip.length = 0.01,hide.ns = F, label.size = 4 )+
+  scale_fill_manual(values=c("#1B76BD", "#A51E23"))+
+  theme_classic()
+
+ggsave(here("Figs", "Spleen_barchart_counts.pdf"), width = 7, height = 4)
+
+write_tsv(cell.counts, here( "Output", "Spleen_cell_counts.tsv"))
+```
+
+
+
+
+
