@@ -177,7 +177,7 @@ plotEnrichment(pathway = pathways[[pw]], stats)+
             vjust = "inward", hjust = "inward")
 ```
 
-<img src="3-MC_based_analysis_files/figure-gfm/example_3-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/example_2-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "MC12_Pathway_IFNa.pdf"), device = "pdf", width = 5, height = 3, useDingbats=FALSE )
