@@ -161,7 +161,7 @@ fgseaRes %>%
     geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/plot_pathways-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/plot_pathways-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "Pathways_Hallmark.pdf"), device = "pdf", width = 6, height = 4, useDingbats=FALSE )
@@ -217,7 +217,7 @@ fgseaRes %>%
     geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/plot_TGFb-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/plot_TGFb-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "Pathways_C2_TGFB.pdf"),device = "pdf", width = 4, height = 3, useDingbats=FALSE )
@@ -321,7 +321,7 @@ marks %>%
     annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/TGFb_volcano-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/TGFb_volcano-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "Volcano_TGFb.pdf"), width = 3, height = 4, scale = 1.2)
@@ -352,7 +352,7 @@ marks %>%
     annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/IFN_volcano-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/IFN_volcano-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "Volcano_IFN.pdf"), width = 3, height = 4, scale = 1.2)
@@ -376,7 +376,7 @@ marks %>%
     geom_hline(yintercept = log10(1.731084e-06), linetype ="dotted")
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/melan_volcano-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/melan_volcano-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "Volcano_melan.pdf"), width = 3, height = 4, scale = 1.2)
@@ -410,7 +410,7 @@ marks %>%
     annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
 ```
 
-<img src="1-GSEA_tumor_files/figure-gfm/cell_cycle_volcano-1.png" style="display: block; margin: auto;" />
+<img src="2-GSEA_tumor_files/figure-gfm/cell_cycle_volcano-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "Volcano_CellCycle.pdf"), width = 3, height = 4, scale = 1.2)

@@ -60,7 +60,7 @@ TopBot.MC12 %>%
     coord_flip()
 ```
 
-<img src="2-MC_based_analysis_files/figure-gfm/top_bottom_plot-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/top_bottom_plot-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "MC12_top_bottom.pdf"), width = 1, height = 2, scale = 2.5)
@@ -133,7 +133,7 @@ fgseaRes %>%
     geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
 ```
 
-<img src="2-MC_based_analysis_files/figure-gfm/plot_enrichment-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/plot_enrichment-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "MC12_Pathways_Hallmark.pdf"), device = "pdf", width = 5, height = 4, useDingbats=FALSE )
@@ -158,7 +158,7 @@ plotEnrichment(pathway = pathways[[pw]], stats)+
             vjust = "inward", hjust = "inward")
 ```
 
-<img src="2-MC_based_analysis_files/figure-gfm/example_1-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/example_1-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "MC12_Pathway_IFNy.pdf"), device = "pdf", width = 5, height = 3, useDingbats=FALSE )
@@ -177,7 +177,7 @@ plotEnrichment(pathway = pathways[[pw]], stats)+
             vjust = "inward", hjust = "inward")
 ```
 
-<img src="2-MC_based_analysis_files/figure-gfm/example_2-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/example_3-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(filename = here("Figs", "tumor", "MC12_Pathway_IFNa.pdf"), device = "pdf", width = 5, height = 3, useDingbats=FALSE )
@@ -215,7 +215,7 @@ seurat.object %>%
   dplyr::select(one_of(c("cellcode", IFN.genes))) -> IFN.gene.expression
 ```
 
-    ## Warning: Unknown columns: `Cxcl11`, `H2-Bl`, `Ifi30`, `Marchf1`, `Mx2`
+    ## Warning: Unknown columns: `Cxcl11`, `H3-Bl`, `Ifi30`, `Marchf1`, `Mx2`
 
 ``` r
 IFN.gene.expression
@@ -288,7 +288,7 @@ violin.data %>%
     theme( strip.background = element_blank())
 ```
 
-<img src="2-MC_based_analysis_files/figure-gfm/violins-1.png" style="display: block; margin: auto;" />
+<img src="3-MC_based_analysis_files/figure-gfm/violins-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here("Figs", "tumor", "MC_IFN_Violins.pdf"), width = 12, height = 6, scale = 1.2)
