@@ -129,7 +129,7 @@ Lets have a look at the correlations between these signatures.
 ggpairs(cytosig.IFN, columns = c("IFNA", "IFNB", "IFNG"))
 ```
 
-<img src="3-IFN_I_vs_II_files/figure-gfm/correlations-1.png" style="display: block; margin: auto;" />
+<img src="4-IFN_I_vs_II_files/figure-gfm/correlations-1.png" style="display: block; margin: auto;" />
 
 ## Map mouse to human gene symbols
 
@@ -155,16 +155,16 @@ tail(conversion, 10)
 ```
 
     ##       HGNC.symbol MGI.symbol
-    ## 18424       SPTA1      Spta1
-    ## 18425      CHRNA9     Chrna9
-    ## 18426       FOLR2      Folr2
-    ## 18427      RAD23B     Rad23b
-    ## 18428       RNF25      Rnf25
-    ## 18429      ADARB1     Adarb1
-    ## 18430      ZNF582     Gm3854
-    ## 18431       EIF5B      Eif5b
-    ## 18432    CDC42SE2   Cdc42se2
-    ## 18433     ALDH1L2    Aldh1l2
+    ## 18424      COL1A1     Col1a1
+    ## 18425       KCTD2      Kctd2
+    ## 18426       NHEJ1      Nhej1
+    ## 18427      FCGR2A     Fcgr2b
+    ## 18428      FCGR2A      Fcgr3
+    ## 18429      STYXL1     Styxl1
+    ## 18430      ACVR2A     Acvr2a
+    ## 18431      UNC13B     Unc13b
+    ## 18432       BCAT2      Bcat2
+    ## 18433         OAT        Oat
 
 Now import the tumor data.
 
@@ -196,7 +196,7 @@ Check the correlations.
 ggpairs(combined.data, columns = c("IFNA", "IFNB", "IFNG", "MC12"), )
 ```
 
-<img src="3-IFN_I_vs_II_files/figure-gfm/correlations2-1.png" style="display: block; margin: auto;" />
+<img src="4-IFN_I_vs_II_files/figure-gfm/correlations2-1.png" style="display: block; margin: auto;" />
 
 Gene-enrichment in MC12 does not seem to have a stronger correlation
 with any of the signatures.
@@ -228,7 +228,7 @@ combined.data %>%
   geom_boxplot(color = "black", width = .1, fill = NA)
 ```
 
-<img src="3-IFN_I_vs_II_files/figure-gfm/plot_sig-1.png" style="display: block; margin: auto;" />
+<img src="4-IFN_I_vs_II_files/figure-gfm/plot_sig-1.png" style="display: block; margin: auto;" />
 
 # CytoSig analysis (using webtool)
 
@@ -298,7 +298,7 @@ cytosig.results %>%
   coord_flip()
 ```
 
-<img src="3-IFN_I_vs_II_files/figure-gfm/plot_cytosig-1.png" style="display: block; margin: auto;" />
+<img src="4-IFN_I_vs_II_files/figure-gfm/plot_cytosig-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here( "Figs", "tumor", "cytosig_all.pdf"), height = 10, width = 12)
@@ -316,7 +316,7 @@ cytosig.results %>%
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 ```
 
-<img src="3-IFN_I_vs_II_files/figure-gfm/plot_MC12-1.png" style="display: block; margin: auto;" />
+<img src="4-IFN_I_vs_II_files/figure-gfm/plot_MC12-1.png" style="display: block; margin: auto;" />
 
 ``` r
 ggsave(here( "Figs", "tumor", "cytosig_MC12.pdf"), height = 4, width = 6, scale = 1.5)
