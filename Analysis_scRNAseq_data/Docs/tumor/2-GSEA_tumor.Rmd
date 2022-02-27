@@ -1,0 +1,377 @@
+---
+title: "Gene set enrichment analysis tumor cells"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+
+
+```{r loading, echo=FALSE}
+library(here)
+library(Seurat)
+library(fgsea)
+library(metacell)
+library(msigdbr)
+library(ggpubr)
+library(ggrepel)
+library(ggpmisc)
+library(tidyverse)
+
+```
+
+
+# Import and normalize
+
+Import the Seurat object containing the tumor cells.
+
+```{r import_seurat}
+(seurat.object <- read_rds(here("Data", "seurat_Tum.rds")))
+```
+
+```{r subset_seurat}
+scdb_init(here("Data", "Metacell_files_tumor"))
+mc <- scdb_mc("QPCTL_Tum_MC2")
+
+seurat.object <- subset(seurat.object, cells = names(mc@mc))
+
+seurat.object@meta.data %>% 
+  mutate(hash.ID = case_when(hash.ID != "Singlet" ~ HTO_maxID,
+                             TRUE ~ hash.ID)) -> seurat.object@meta.data 
+
+seurat.object
+```
+
+
+
+```{r normalize_seurat, cache=TRUE, cache.lazy = FALSE}
+seurat.object <- NormalizeData(seurat.object, normalization.method = "CLR", assay = "RNA")
+```
+
+# DE testing
+
+Add genotype into the metadata table, first three hashtags are WT cells, the others are KO cells.
+
+```{r add_genotype}
+seurat.object@meta.data %>% 
+  mutate(genotype = fct_collapse(hash.ID, 
+                                 WT = c("HTO1", "HTO2", "HTO3"), 
+                                 KO = c("HTO4", "HTO5", "HTO6"))) -> seurat.object@meta.data 
+
+```
+
+Calculate differentially expressed genes between KO and WT. 
+
+```{r DE_testing, cache=TRUE, cache.lazy = FALSE}
+Idents(seurat.object) <- "genotype"
+marks <- FindMarkers(object = seurat.object, ident.1 = 'KO', ident.2 = 'WT', logfc.threshold = 0, test.use = "wilcox", min.pct = 0.1)
+
+marks <- as_tibble(marks, rownames = "gene")
+
+write_tsv(marks, here("Output", "tumor_KOvsWT_marks.tsv"))
+
+marks
+
+```
+
+
+# Pathway analysis
+
+## Hallmark pathways
+
+Lets first import the hallmark pathways
+
+```{r get_pathways}
+pathways.hallmark <- as.data.frame(msigdbr(species = "Mus musculus", category = "H"))
+pathways <- split(pathways.hallmark$gene_symbol, pathways.hallmark$gs_name)
+
+pathways %>% 
+  head(10) %>% 
+  str()
+```
+
+Get the stats to feed to `fgsea`
+
+```{r get_stats}
+marks %>% 
+  filter(p_val < 0.05) %>%  
+  select(gene, avg_log2FC) %>% 
+  deframe() %>% 
+  sort(decreasing = T) -> stats
+```
+
+
+```{r perform_GSEA}
+fgseaRes <- fgseaMultilevel(pathways, stats, eps = 0, minSize = 20)
+
+(fgseaRes <- as_tibble(fgseaRes))
+```
+
+
+```{r plot_pathways, fig.width=5.8, fig.asp=0.75}
+fgseaRes %>% 
+  filter(padj < 0.05)  %>% 
+  mutate(pathway = gsub("HALLMARK_", "", pathway),
+         pathway = gsub("_", " ", pathway),
+         pathway = reorder(pathway, NES)) %>% 
+  ggplot( aes(x = NES, y = pathway))+
+    geom_point(aes(size = size, color  = padj))+
+    grids(axis = "y", linetype = "dashed")+
+    geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
+
+ggsave(filename = here("Figs", "tumor", "Pathways_Hallmark.pdf"), device = "pdf", width = 5, height = 4, useDingbats=FALSE, scale = 1 )
+
+fgseaRes %>% 
+  filter(pval < 0.05)  %>% 
+  write_tsv(here("Output", "tumor_GSEA_Hallmark.tsv"))
+```
+
+
+
+
+
+## TGFb pathways
+
+Lets first import the immune related pathways (C2) pathways
+
+```{r import_C2}
+pathways.hallmark <- as.data.frame(msigdbr(species = "Mus musculus", category = "C2"))
+pathways <- split(pathways.hallmark$gene_symbol, pathways.hallmark$gs_name)
+```
+
+
+Perform GSEA
+
+```{r perform_GSEA_C2}
+fgseaRes <- fgseaMultilevel(pathways, stats, eps = 0, minSize = 10)
+
+(fgseaRes <- as_tibble(fgseaRes))
+```
+
+
+Select the pathways that contain TGF
+
+```{r plot_TGFb, fig.width=5.8}
+fgseaRes %>% 
+  filter(pval < 0.05) %>% 
+  filter(str_detect(pathway, "TGF"))%>% 
+  mutate(pathway = gsub("_", " ", pathway),
+         pathway = reorder(pathway, NES)) %>% 
+  ggplot( aes(x = NES, y = pathway))+
+    geom_point(aes(size = size, color  = padj))+
+    grids(axis = "y", linetype = "dashed")+
+    geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
+
+ggsave(filename = here("Figs", "tumor", "Pathways_C2_TGFB.pdf"),device = "pdf", width = 5.5, height = 4, useDingbats=FALSE )
+
+fgseaRes %>% 
+  filter(pval < 0.05) %>% 
+  filter(str_detect(pathway, "TGF"))%>% 
+  write_tsv(here("Output", "tumor_GSEA_C2_TGFb.tsv"))
+```
+
+# Volcano plots
+
+## Build signatures
+
+We'd like to superimpose a few gene-signatures on top of the volcano plot. Start off with building those from the MsigDB signatures. 
+
+### TGFb signature
+
+Will collect TGFb responsive genes by combining the Hallmark TGFb response from the HALLMARK collection with all signatures from the C2 collection that contain the strings `"TGF"` and `"UP"`. 
+
+```{r get_TGFb}
+msigdbr(species = "Mus musculus", category = "H") %>% 
+  as_tibble() %>% 
+  filter(str_detect(gs_name, "TGF")) %>% 
+  pull(gene_symbol) %>% 
+  unique -> genes.TGFb
+
+msigdbr(species = "Mus musculus", category = "C2") %>% 
+  as_tibble() %>% 
+  filter(str_detect(gs_name, "TGF")) %>% 
+  filter(str_detect(gs_name, "UP")) %>% 
+  pull(gene_symbol) %>% 
+  union(genes.TGFb) %>% 
+  unique -> genes.TGFb
+
+write_lines(genes.TGFb, here("Output", "TGFb_signature.txt"))
+```
+
+
+### IFN signature
+
+```{r get_IFN}
+msigdbr(species = "Mus musculus", category = "C2") %>% 
+  as_tibble() %>% 
+  dplyr::filter(str_detect(gs_name, "IFN")) %>% 
+  dplyr::filter(!str_detect(gs_name, "DN")) %>% 
+  pull(gene_symbol) %>% 
+  unique -> genes.IFN
+
+msigdbr(species = "Mus musculus", category = "H") %>% 
+  as_tibble() %>% 
+  dplyr::filter(str_detect(gs_name, "INTE")) %>% 
+  pull(gene_symbol) %>% 
+  unique %>% 
+  union( genes.IFN) %>% 
+  union(grep("^H2\\-K|^H2\\-D|Ifi|Gbp", marks$gene, value = T)) -> genes.IFN
+
+write_lines(genes.IFN, here("Output", "IFN_signature.txt"))
+```
+
+### Cell cycle
+
+```{r get_cell_cycle}
+paths <- c("HALLMARK_MYC_TARGETS_V1", "HALLMARK_MYC_TARGETS_V2", "HALLMARK_MITOTIC_SPINDLE", "HALLMARK_G2M_CHECKPOINT", "HALLMARK_E2F_TARGETS", "HALLMARK_OXIDATIVE_PHOSPHORYLATION", "HALLMARK_GLYCOLYSIS")
+
+msigdbr(species = "Mus musculus", category = "H") %>% 
+  as_tibble() %>% 
+  filter(gs_name %in% paths) %>% 
+  pull(gene_symbol) %>% 
+  unique() -> genes.cellcycle
+
+write_lines(genes.cellcycle, here("Output", "CellCycle_signature.txt"))
+```
+
+
+## Plot volcano's
+
+
+```{r TGFb_volcano, fig.width=6, fig.asp=1}
+marks %>%
+  mutate(sig = ((gene %in% genes.TGFb) & (p_val_adj < 0.05)) ) %>% 
+  filter(p_val_adj < 0.05) %>% 
+  mutate(direction = ifelse(avg_log2FC > 0, "up", "down") )%>% 
+  group_by(sig, direction) %>% 
+  tally() %>% 
+  pivot_wider(names_from = direction, values_from = n) %>% 
+  arrange(desc(sig))-> numbers
+
+marks %>% 
+  mutate(sig = ((gene %in% genes.TGFb) & (p_val_adj < 0.05)) ) %>% 
+  arrange(sig) %>% 
+  ggplot( aes( y= log10(p_val) , x=avg_log2FC, color = sig, label = gene) ) + 
+    geom_point()+
+    scale_y_reverse()+
+    scale_color_manual(values=c("#c0c0c0", "red"))+
+    labs(title = "DE tumor | TGFb signature")+
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+    xlim(-.3,.3)+
+    geom_vline(xintercept = 0, linetype ="dotted")+
+    geom_hline(yintercept = log10(1.731084e-06), linetype ="dotted")+
+    annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
+
+ggsave(here("Figs", "tumor", "Volcano_TGFb.pdf"), width = 3, height = 4, scale = 1.2)
+```
+
+
+
+```{r IFN_volcano,fig.width=6, fig.asp=1}
+marks %>%
+  mutate(sig = ((gene %in% genes.IFN) & (p_val_adj < 0.05)) ) %>% 
+  filter(p_val_adj < 0.05) %>% 
+  mutate(direction = ifelse(avg_log2FC > 0, "up", "down") )%>% 
+  group_by(sig, direction) %>% 
+  tally() %>% 
+  pivot_wider(names_from = direction, values_from = n) %>% 
+  arrange(desc(sig))-> numbers
+
+marks %>% 
+  mutate(sig = ((gene %in% genes.IFN) & (p_val_adj < 0.05)) ) %>% 
+  arrange(sig) %>% 
+  ggplot( aes( y= log10(p_val) , x=avg_log2FC, color = sig, label = gene) ) + 
+    geom_point()+
+    scale_y_reverse()+
+    scale_color_manual(values=c("#c0c0c0", "red"))+
+    labs(title = "DE tumor | IFN signature")+
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+    xlim(-.3,.3)+
+    geom_vline(xintercept = 0, linetype ="dotted")+
+    geom_hline(yintercept = log10(1.731084e-06), linetype ="dotted")+
+    annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
+
+ggsave(here("Figs", "tumor", "Volcano_IFN.pdf"), width = 3, height = 4, scale = 1.2)
+```
+
+
+
+```{r melan_volcano,fig.width=6, fig.asp=1}
+melan <- c("Tyrp1", "Tyr", "Dct", "Mitf", "Trpm1","Met", "Mlana","Pmel", "Gpnmb","Mc1r")
+
+marks %>% 
+  mutate(sig = gene %in% melan ) %>% 
+  arrange(sig) %>% 
+  ggplot( aes( y= log10(p_val) , x=avg_log2FC, color = sig, label = gene) ) + 
+    geom_point()+
+    scale_y_reverse()+
+    geom_text_repel(data = . %>% filter(sig == TRUE), box.padding = 2, max.overlaps = 15 )+
+    scale_color_manual(values=c("#c0c0c0", "red"))+
+    labs(title = "DE tumor | Melanogenisis genes")+
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+    xlim(-.3,.3)+
+    geom_vline(xintercept = 0, linetype ="dotted")+
+    geom_hline(yintercept = log10(1.731084e-06), linetype ="dotted")
+
+ggsave(here("Figs", "tumor", "Volcano_melan.pdf"), width = 3, height = 4, scale = 1.2)
+```
+
+
+
+```{r cell_cycle_volcano,fig.width=6, fig.asp=1}
+marks %>%
+  mutate(sig = ((gene %in% genes.cellcycle) & (p_val_adj < 0.05)) ) %>% 
+  filter(p_val_adj < 0.05) %>% 
+  mutate(direction = ifelse(avg_log2FC > 0, "up", "down") )%>% 
+  group_by(sig, direction) %>% 
+  tally() %>% 
+  pivot_wider(names_from = direction, values_from = n) %>% 
+  arrange(desc(sig))-> numbers
+
+marks %>% 
+  mutate(sig = ((gene %in% genes.cellcycle) & (p_val_adj < 0.05)) ) %>% 
+  arrange(sig) %>% 
+  ggplot( aes( y= log10(p_val) , x=avg_log2FC, color = sig, label = gene) ) + 
+    geom_point()+
+    scale_y_reverse()+
+    scale_color_manual(values=c("#c0c0c0", "red"))+
+    labs(title = "DE tumor | Cell cycle related genes")+
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+    xlim(-.3,.3)+
+    geom_vline(xintercept = 0, linetype ="dotted")+
+    geom_hline(yintercept = log10(1.731084e-06), linetype ="dotted")+
+    annotate(geom = "table", x = -.28, y = log10(1e-84), label = list(numbers))
+
+ggsave(here("Figs", "tumor", "Volcano_CellCycle.pdf"), width = 3, height = 4, scale = 1.2)
+
+```
+
+
+
+
+
+
+
+

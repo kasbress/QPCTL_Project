@@ -1,0 +1,249 @@
+---
+title: "MetaCell based analyses - Tumor compartment"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+
+Used the analysis below to investigate genes of interest in Tumor MetaCell 12, which was specifically enriched in QPCTL deficient TMEs
+
+
+```{r loading, echo=FALSE}
+library(here)
+library(Seurat)
+library(fgsea)
+library(metacell)
+library(msigdbr)
+library(ggpubr)
+library(tidyverse)
+
+```
+
+
+## Import data
+
+Get the metacell object
+
+```{r import}
+scdb_init(here("Data", "Metacell_files_tumor"))
+mc <- scdb_mc("QPCTL_Tum_MC2")
+```
+
+## Plot marker genes
+
+Check the top and bottom 5 genes of MC12. 
+
+```{r get_markers}
+lfp <- as.data.frame(log2(mc@mc_fp))
+
+lfp %>% 
+  rownames_to_column("genes") %>% 
+  dplyr::select("genes", "12") %>% 
+  filter(dense_rank(`12`) <= 5 | dense_rank(-`12`) <= 5) -> TopBot.MC12
+
+TopBot.MC12
+```
+
+
+and plot as waterfall.
+
+```{r top_bottom_plot, fig.asp=1.2, fig.width=3}
+TopBot.MC12 %>% 
+  mutate(genes = reorder(genes, `12`)) %>% 
+  ggplot(aes(x = genes, y = `12`, fill = `12` > 0))+
+    geom_bar(stat = "identity")+
+    scale_fill_manual(values=c("blue", "red"))+
+    labs(title = "top and bottom MC12", x = "gene", y = "log2 enrichment")+
+    theme(legend.position = "none", plot.title = element_text(hjust = -1))+
+    coord_flip()
+
+ggsave(here("Figs", "tumor", "MC12_top_bottom.pdf"), width = 1, height = 2, scale = 2.5)
+```
+
+## GSEA MC12
+
+First get the top and bottom 200 genes of MC12. Will use as input for fgsea analysis.
+
+```{r get_stats}
+lfp %>% 
+  rownames_to_column("genes") %>% 
+  dplyr::select("genes", "12") %>% 
+  deframe() %>% 
+  sort(decreasing = T) -> stats
+
+# subset to 200 highest and 200 lowest values
+stats <- stats[dense_rank(stats) <= 200 | dense_rank(-stats) <= 200]
+
+str(stats)
+```
+
+
+Now import the pathways
+
+```{r get_pathways}
+pathways.hallmark <- as.data.frame(msigdbr(species = "Mus musculus", category = "H"))
+pathways <- split(pathways.hallmark$gene_symbol, pathways.hallmark$gs_name)
+
+pathways %>% 
+  head(10) %>% 
+  str()
+```
+
+And perform the analysis. 
+
+```{r run_fgsea}
+fgseaRes <- fgsea(pathways=pathways, stats=stats, minSize = 10)
+```
+
+
+Now we can plot the enrichment of the pathways foudn by fgsea. 
+
+```{r plot_enrichment, fig.asp=.8}
+fgseaRes %>% 
+  filter(pval < 0.05)  %>% 
+  mutate(pathway = gsub("HALLMARK_", "", pathway),
+         pathway = gsub("_", " ", pathway),
+         pathway = reorder(pathway, NES)) %>% 
+  ggplot( aes(x = NES, y = pathway))+
+    geom_point(aes(size = size, color  = padj))+
+    grids(axis = "y", linetype = "dashed")+
+    geom_vline(xintercept = 0, color = "blue", linetype = "dotted")
+
+ggsave(filename = here("Figs", "tumor", "MC12_Pathways_Hallmark.pdf"), device = "pdf", width = 4.5, height = 4, useDingbats=FALSE )
+
+fgseaRes %>% 
+  filter(pval < 0.05)  %>% 
+  write_tsv(here("Output", "tumor_MC12_GSEA_Hallmark.tsv"))
+```
+
+
+And plot the top scoring pathways. 
+
+```{r example_1}
+pw <- "HALLMARK_INTERFERON_GAMMA_RESPONSE"
+
+fgseaRes %>%  
+  dplyr::filter(pathway == pw) %>%  
+  pull(NES) %>% round(digits = 2) -> nes
+
+plotEnrichment(pathway = pathways[[pw]], stats)+
+  ggtitle(pw)+
+  geom_text(aes(label = paste0(c("NES = ", as.character(nes)), collapse = ""), x = Inf, y = Inf  ), 
+            vjust = "inward", hjust = "inward")
+
+
+
+ggsave(filename = here("Figs", "tumor", "MC12_Pathway_IFNy.pdf"), device = "pdf", width = 5, height = 3, useDingbats=FALSE )
+```
+
+```{r example_2}
+pw <- "HALLMARK_INTERFERON_ALPHA_RESPONSE"
+
+fgseaRes %>%  
+  dplyr::filter(pathway == pw) %>%  
+  pull(NES) %>% round(digits = 2) -> nes
+
+plotEnrichment(pathway = pathways[[pw]], stats)+
+  ggtitle(pw)+
+  geom_text(aes(label = paste0(c("NES = ", as.character(nes)), collapse = ""), x = Inf, y = Inf  ), 
+            vjust = "inward", hjust = "inward")
+
+
+
+ggsave(filename = here("Figs", "tumor", "MC12_Pathway_IFNa.pdf"), device = "pdf", width = 5, height = 3, useDingbats=FALSE )
+```
+
+
+## Violin plots
+
+Next, we'll check how various IFN responsive genes are expressed across the different MCs.
+
+Import the seurat object.
+
+```{r import_seurat}
+seurat.object <- read_rds(here("Data", "seurat_Tum.rds"))
+```
+
+Normalize and scale the data.
+
+```{r normalize}
+seurat.object <- NormalizeData(seurat.object, assay = "RNA", normalization.method = "CLR")
+seurat.object <- ScaleData(seurat.object, assay = "RNA")
+```
+
+
+Extract the expression data for all genes in the IFNg geneset.
+
+```{r get_expression_IFN}
+IFN.genes <- pathways[["HALLMARK_INTERFERON_GAMMA_RESPONSE"]]
+
+seurat.object %>% 
+  GetAssayData( slot = "scale.data", assay = "RNA")%>% 
+  as.matrix() %>%
+  t() %>% 
+  as.data.frame() %>% 
+  as_tibble(rownames = "cellcode") %>% 
+  dplyr::select(one_of(c("cellcode", IFN.genes))) -> IFN.gene.expression
+
+IFN.gene.expression
+```
+
+I've selected a number of genes of interest, picked out of the leading edge of the GSEA.
+
+```{r select_genes}
+select.genes <- c("Ifitm3", "B2m", "Bst2", "Stat1", "Cxcl10", "Psmb9", "Psmb8", "Psmb10", "Psme1", 
+              "Isg15", "Psme2", "Tap1", "Rnf213", "Zbp1", "Rsad2", "Ifit3", "Lgals3bp", "Tapbp", "Xaf1", 
+              "Gbp3", "Irf1", "Ifi35", "Herc6", "Parp12", "Nmi", "Parp14", "Rtp4", "Lap3", "Eif2ak2", "Cd74", 
+              "Samd9l", "Ddx58", "Ogfr", "Psma2")
+```
+
+
+prep for plotting.
+
+
+```{r prep}
+IFN.gene.expression %>% 
+  pivot_longer(!cellcode, names_to = "gene", values_to =  "umi") %>% 
+  left_join(enframe(mc@mc, "cellcode", "MC")) %>% 
+  na.omit() %>% 
+  mutate(MC = as.factor(MC)) %>% 
+  filter(gene %in% select.genes) -> violin.data
+
+violin.data
+```
+
+
+```{r violins, fig.width=12}
+violin.data %>% 
+  ggplot(aes(x = MC, y = umi, fill = MC))+
+    geom_violin(scale = "width")+
+    facet_wrap(~gene, scales = "free")+
+    theme( strip.background = element_blank())
+
+ggsave(here("Figs", "tumor", "MC_IFN_Violins.pdf"), width = 12, height = 6, scale = 1.2)
+```
+
+

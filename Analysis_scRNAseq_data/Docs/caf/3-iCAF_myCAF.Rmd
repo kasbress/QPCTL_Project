@@ -1,0 +1,153 @@
+---
+title: "iCAF/myCAF analyses"
+author: "Kaspar Bresser"
+date: "22/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+
+In the analyses below I compare the cancer associated fibroblasts from our scRNAseq dataset to iCAF and myCAF signatures identified by others and quantify their presence in the TME.
+
+Load packages needed for the analysis. 
+
+
+```{r loading, echo=FALSE}
+library(here)
+library(metacell)
+library(Seurat)
+library(tidyverse)
+```
+
+And import data 
+
+```{r import_data}
+scdb_init(here("Data", "Metacell_files_fibroblast"), force_reinit = T)
+mc <- scdb_mc("QPCTL_fibro_MC")
+
+seurat.object <- read_rds(here("Data", "seurat_Fibr.rds"))
+```
+
+
+## Plot CAF signatures
+
+Import iCAF and myCAF signatures
+
+
+```{r import_sigs}
+(iCAF <- read_lines(here("Data", "iCAF.txt")))
+
+(myCAF <- read_lines(here("Data", "myCAF.txt")))
+```
+
+Get log2 gene-enrichment values. And add iCAF/myCAF annotation
+
+```{r get_lfp}
+mc@mc_fp %>% 
+  log2() %>% 
+  as_tibble(rownames = "gene") %>% 
+  mutate(signature = case_when(gene %in% iCAF ~ "iCAF",
+                               gene %in% myCAF ~ "myCAF",
+                               TRUE ~ "none")) %>% 
+  pivot_longer(cols = -c(gene, signature), names_to = "MC",values_to = "lfp" ) -> lfp
+
+lfp  
+```
+
+Summarise by signature.
+
+```{r summarise}
+lfp %>% 
+  group_by(signature, MC) %>% 
+  summarise(sig_score = sum(lfp)) %>% 
+  ungroup %>% 
+  # switch to long for dotplot
+  pivot_wider( names_from = signature, values_from = sig_score) -> CAFsigs
+
+CAFsigs
+```
+
+Plot signature scores
+
+
+```{r plot_sigs, fig.asp=.8}
+ggplot(CAFsigs, aes(x = iCAF, y = myCAF, label = MC))+
+  geom_point(size = 7,color = "dodgerblue")+
+  geom_point(size = 7, pch=21,color = "black")+
+  geom_text()+
+  geom_hline(yintercept = 0, linetype = "dashed")+
+  geom_vline(xintercept = 0, linetype = "dashed")
+ggsave(here("Figs", "caf", "sig_exprCAFs.pdf"), width = 4, height = 4, scale = .75, useDingbats = F)
+```
+
+
+## Plot CAF ratio's
+
+Import Seurat object and count cells
+
+```{r count_cells}
+full.seurat <- read_rds(here("Data", "seurat_Fibr.rds"))
+
+enframe(full.seurat$hash.ID, "cellcode", "Hashtag") %>% 
+  right_join(enframe(as.factor(mc@mc), "cellcode", "MC")) %>% 
+  count(Hashtag, MC) -> cell.counts
+
+cell.counts
+```
+
+Normalize within hashtags, select MetaCell 2 and 4, calculate ratio's and add samples identities. 
+
+```{r}
+cell.counts %>% 
+  # Normalize per hashtag
+  group_by(Hashtag)%>%
+  mutate(normalized.count = (n/sum(n))*1000 ) %>% 
+  ungroup() %>% 
+  # filter to the iCAF and myCAF MCs
+  filter(MC %in% c("2","4")) %>% 
+  # put counts in separate columns and calculate ratio
+  pivot_wider(id_cols = -n, names_from = MC, values_from = normalized.count) %>% 
+  mutate(ratio = `2`/`4`) %>% 
+  # Add genotype identity
+  mutate(genotype = fct_collapse(Hashtag,WT = c("HTO1","HTO2","HTO3"), 
+                                 KO = c("HTO4", "HTO5", "HTO6")  )) -> for.plot
+
+for.plot
+```
+
+And make the plot.
+
+
+```{r plot_ratios, fig.asp=1, fig.width=3}
+ggplot(for.plot, aes(x = genotype, y = log2(ratio))) +
+  geom_jitter(position=position_jitter(0.1))+
+  geom_hline( yintercept = 0,  linetype="dotted")+ 
+  stat_summary(fun.data=mean_sdl,  geom="pointrange", color="blue", cex = 0.2)+
+  labs(y = "log2 myCAF/iCAF ratio")
+ggsave( here("Figs", "caf", "sig_exprCAFsRatio.pdf"), width = 3, height = 4, scale = .75, useDingbats = F)
+```
+
+
+
+

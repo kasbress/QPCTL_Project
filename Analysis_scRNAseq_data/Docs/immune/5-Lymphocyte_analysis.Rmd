@@ -1,0 +1,127 @@
+---
+title: "Lymphocyte compartment analysis"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+In the immune compartment of the scRNAseq dataset, we identified a lymphocyte MetaCell (MetaCell 6). We observe no difference in the quantities of these cells. In the analysis below I'll check if these cells are transcriptionally different.
+
+Import packages and data needed for the analysis.
+
+```{r loading, echo=FALSE}
+library(here)
+library(metacell)
+library(Seurat)
+library(limma)
+library(tidyverse)
+
+scdb_init(here("Data", "Metacell_files_imm"))
+mc <- scdb_mc("QPCTL_Imm_MC")
+MC.graph <- scdb_mc2d("QPCTL_Imm_MC")
+
+
+seurat.obj <- read_rds(here("Data", "seurat_immune.rds"))
+```
+
+
+## Subset and DE testing
+
+```{r get_lymph}
+lympoid.cells <- names(mc@mc[mc@mc == 6])
+
+seurat.obj <- subset(seurat.obj, cells = lympoid.cells)
+
+seurat.obj <- NormalizeData(seurat.obj)
+```
+
+Collapse hashtags together for DE comparisons between QPCTL-proficient and QPCTL-deficient
+
+```{r add_meta}
+seurat.obj@meta.data %>% 
+  as_tibble(rownames = "cellcode") %>% 
+  mutate(hash.ID = case_when(hash.ID == "Doublet" ~ HTO_maxID,
+                             TRUE ~ hash.ID)) -> seurat.obj@meta.data
+
+seurat.obj@meta.data %>% 
+  dplyr::select(cellcode, hash.ID) %>% 
+  deframe %>% 
+  as.factor %>% 
+  fct_collapse(WT = c("HTO1", "HTO2", "HTO3"), KO = c("HTO4", "HTO5", "HTO6")) -> genotype
+
+str(genotype)
+
+seurat.obj <- AddMetaData(object = seurat.obj, metadata = genotype, col.name = "genotype")
+```
+
+And test for differentially expressed genes. 
+
+```{r DEtest}
+Idents(seurat.obj) <- "genotype"
+marks <- FindMarkers(object = seurat.obj, ident.1 = 'KO', ident.2 = 'WT', 
+                     logfc.threshold = 0, test.use = "wilcox", min.pct = 0.1, slot = "counts")
+
+```
+
+And save data.
+
+```{r save_data}
+marks <- as_tibble(marks, rownames = "gene")
+
+arrange(marks, desc(avg_log2FC))
+
+write_tsv(marks, here("Output", "Imm_Lymphoid_DEtest.tsv"))
+```
+
+
+## Plot data
+
+Plot the top 12 enriched genes in QPCTL-deficient TMEs (For supplementary figure).
+
+```{r fig.asp=.3, fig.width=16}
+marks %>% 
+  slice_max(order_by = avg_log2FC, n = 12) %>% 
+  pull(gene) -> genes
+
+colors <- c("#1B77BD","#1B77BD","#1B77BD","#A61E24","#A61E24","#A61E24")
+
+Idents(seurat.obj) <- "hash.ID"
+VlnPlot(seurat.obj, features = genes, ncol = 6, cols = colors, pt.size = 1.5)
+```
+
+
+Plot some selected genes (for main figure).
+
+```{r fig.asp=.4, fig.width=12}
+genes <- c("Top2a", "Mki67", "Birc5", "Eif5a", "Ifng", "Klrd1", "Il2rb", "Tnfrsf9")
+
+VlnPlot(seurat.obj, features = genes, ncol = 4, pt.size = 1.5 ,cols = colors)
+```
+
+
+
+
+
+

@@ -1,0 +1,199 @@
+---
+title: "Compare scRNAseq data with external dataset"
+author: "Kaspar Bresser"
+date: "15/01/2022"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+One of the referee's was interested in how the myeloid MetaCells that we describe in our dataset relate to myeloid phenotypes found in other studies. Here I'll try to investigate this.  [This](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE119352) study scRNA sequenced TMEs from induced mouse tumors that were subjected to various ICB treatments, will have a look if we can use this data for a comparison to our cell states.
+
+We'll use the log2 gene-enrichment values to compare to. Load in necessary packages and get the lfp table
+
+```{r loading, echo=FALSE}
+library(here)
+library(ClusterMap)
+library(metacell)
+library(biomaRt)
+library(Seurat)
+library(tidytext)
+library(tidyverse)
+
+
+scdb_init(here("Data", "Metacell_files_imm"), force_reinit=T)
+mc <- scdb_mc("QPCTL_Imm_MC")
+lfp <- as.data.frame(log2(mc@mc_fp))
+```
+
+
+# Import and reformat data
+
+The authors uploaded a meta data table with cell annotations, and the 10x files for each of the treatments. Note that the cluster labels no not correspond to the published manuscript. THe myeloid cells are in the upper-left cluster, i.e. GraphCluster 0, 1, 2, 4 and 7.
+
+```{r import_meta_data, fig.show='hold', out.width="50%"}
+meta <- read_tsv(here("Data", "ICB_data", "GSE119352_scRNAseq_CD45_meta_data.tsv"))
+
+meta
+
+ggplot(meta, aes(tSNE_1, tSNE_2, color = as.factor(GraphCluster)))+
+  geom_point(size = 0.5)+
+  theme(legend.title = element_text(size = 0))+
+  guides(color=guide_legend(ncol=2))
+ggplot(meta, aes(tSNE_1, tSNE_2, color = as.factor(GraphCluster %in% c(0,1,2,4,7))))+
+  geom_point(size = 0.5)+
+  theme(legend.title = element_text(size = 0))
+```
+
+Next import the 10x data. The authors uploaded separate files for each ICB treatment group. I've stored these in the folders `c("control", "PD1", "CTLA4", "combined")`. In the metadata the cellcodes from each of the groups are identified by a numeric suffix. Defined a function `import_10x` to read the 10x files from a folder, and add a numeric suffix, then create a Seurat object. 
+Used `purrr:map2` to apply this function for each dataset, then `merge` the 4 objects into a single Seurat object.
+
+```{r import_10x}
+import_10x <- function(directory, n){
+  
+  tmp <- Read10X(here("Data", "ICB_data", directory), strip.suffix = T)
+  tmp@Dimnames[[2]] <- paste0(tmp@Dimnames[[2]], paste0("-", n))
+  tmp <- CreateSeuratObject(tmp)
+  
+  tmp
+}
+
+samples <- c("control", "PD1", "CTLA4", "combined")
+suffixes <- 1:4
+
+seurat.list <- map2(samples, suffixes, import_10x)
+
+seurat.obj <- merge(seurat.list[[1]], seurat.list[2:4])
+rm(seurat.list)
+
+seurat.obj
+```
+
+# Find markers myeloid clusters
+
+Subset on myeloid clusters and normalize the data.
+
+```{r subset_normalize, fig.width=12}
+meta %>% 
+  filter(GraphCluster %in%  c(0,1,2,4,7)) %>% 
+  pull(...1) -> myeloid.cells
+
+
+seurat.obj <- subset(seurat.obj, cells = myeloid.cells)
+
+seurat.obj <- NormalizeData(seurat.obj, normalization.method = "CLR")
+
+seurat.obj
+```
+
+
+Add cluster labels and find markers for each cluster
+
+```{r get_markers}
+meta %>% 
+  filter(GraphCluster %in% c(0,1,2,4,7)) %>% 
+  select(...1, GraphCluster) %>% 
+  deframe() -> cluster.info
+seurat.obj <- AddMetaData(seurat.obj, cluster.info, col.name = "GraphCluster")
+
+seurat.obj <- SetIdent(seurat.obj, value = "GraphCluster")
+myeloid.markers <- FindAllMarkers(seurat.obj, min.pct = 0.2, logfc.threshold = 0,  only.pos = F)
+
+(myeloid.markers <- as_tibble(myeloid.markers))
+```
+
+# Compare sets
+
+We'll focus on myeloid MC1, MC2 and MC3 from our data, for which we observed the largest shifts in the TME of QPCTL KO versus WT mice. Join the data with the DE data and retain only significantly DE genes.
+
+```{r prep_data}
+lfp %>% 
+  as_tibble( rownames = "gene") %>% 
+  select(gene, `1` , `2`, `3`) %>% 
+  set_names("gene", "MC1", "MC2", "MC3") %>%
+  pivot_longer(-gene, names_to = "Metacell", values_to = "lfp") %>% 
+  inner_join(myeloid.markers) %>%  
+  filter(p_val_adj < 0.05)  -> combined.data
+
+combined.data
+```
+
+
+
+Now filter the marker genes of each cluster for the top genes found inthe MetaCells. Then plot the differential expression of these genes in the different clusters
+
+
+```{r waterfalls, fig.width=12, fig.asp=.7}
+combined.data %>% 
+  group_by(cluster, Metacell) %>% 
+  slice_max(lfp, n = 25) %>% 
+  mutate(gene = reorder_within(gene, by = avg_log2FC, within = list(cluster, Metacell)),
+         cluster = fct_recode(cluster, Mac_s1 = "0", Mac_s2 = "1", Mac_s3 = "2", Mac_s4 = "4", Mac_s5 = "7")) %>% 
+  ggplot(aes(x = gene, y = avg_log2FC, fill = avg_log2FC > 0))+
+    geom_bar(stat = "identity")+
+    coord_flip()+
+    scale_x_reordered()+
+    facet_wrap(Metacell~cluster, scales = "free_y", nrow = 3)
+
+ggsave(here("Figs", "immune", "compare_mac_waterfalls.pdf"), width = 8, height = 7, scale = 1.4)
+```
+
+
+Plot this data as sum scores. 
+
+```{r only_pos, fig.asp=.45}
+combined.data %>% 
+  group_by(cluster, Metacell) %>% 
+  slice_max(lfp, n = 25) %>% 
+  summarise(score = sum((avg_log2FC))) %>% 
+  ggplot(aes(cluster, score, fill = Metacell))+
+  geom_bar(stat = "identity", position = "dodge")+
+  facet_wrap(~Metacell, scales = "free")
+```
+
+
+Can also use these top genes to calculate a similarity score. To do this I perform a weighted sampling of the avg_log2FC values (weighted by the lfp values of those genes, putting more prominence on genes that were more enriched). Similarity score is defined as the median of those sampled values.
+
+
+```{r similarity_score, fig.asp=.5}
+combined.data %>% 
+  group_by(cluster, Metacell) %>% 
+  slice_max(lfp, n = 25) %>% 
+  slice_sample(n = 10000, weight_by = lfp, replace = T) %>% 
+  summarise(score = median((avg_log2FC))) %>% 
+  mutate(Metacell = factor(Metacell, levels = c("MC1", "MC3", "MC2")),
+         cluster = fct_recode(cluster, Mac_s1 = "0", Mac_s2 = "1", Mac_s3 = "2", Mac_s4 = "4", Mac_s5 = "7")) %>% 
+    ggplot(aes(cluster, score, fill = Metacell))+
+      geom_bar(stat = "identity", position = "dodge")+
+      facet_wrap(~cluster, nrow = 1, scales = "free_x")
+
+ggsave(here("Figs", "immune", "compare_mac_scores.pdf"), width = 4, height = 2, scale = 1.2)
+```
+
+
+
+
+
+
+
+

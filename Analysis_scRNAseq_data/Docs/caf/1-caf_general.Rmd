@@ -1,0 +1,194 @@
+---
+title: "General analyses CAFs"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+Below some general visualizations of the tumor cell compartment of the scRNAseq data. 
+
+```{r loading, echo=FALSE}
+library(here)
+library(Seurat)
+library(metacell)
+library(tidyverse)
+```
+
+
+## MetaCell 2D projection
+
+
+
+Import the MetaCell object and the 2D coordinates.
+
+
+```{r import_mc}
+scdb_init(here("Data", "Metacell_files_fibroblast"))
+mc <- scdb_mc("QPCTL_fibro_MC")
+
+str(mc)
+```
+
+
+```{r import_coords}
+MC.graph <- scdb_mc2d("QPCTL_fibro_MC")
+
+coords <- tibble( cellcode = names(MC.graph@sc_y),
+                  sc.x = MC.graph@sc_x,
+                  sc.y = MC.graph@sc_y)
+coords
+```
+
+### Plot MetaCells
+
+Add the MetaCell identities to the coordinate data, and plot the 2D projection.
+
+```{r plot_2d, fig.asp=.6}
+str(mc@mc)
+
+mc@mc %>% 
+  enframe(name = "cellcode", value = "MetaCell") %>% 
+  inner_join(coords) %>% 
+  mutate(MetaCell = as.factor(MetaCell)) %>% 
+    ggplot( aes(x = sc.x, y = sc.y, color = MetaCell))+ 
+      geom_point(size = 1.5)+
+      theme_classic()+ 
+      guides(color = guide_legend(override.aes = list(size = 5)))
+
+ggsave(filename = here("Figs", "caf", "general_2d_proj_MCs.pdf"), device = "pdf", width = 4,height = 3.2)
+```
+
+
+### Plot gene-expression
+
+get gene-expression of select genes
+
+```{r get_expression}
+genes <- c('Acta2', 'Col14a1', 'Inhba', 'Tagln', 'C3', 'Gsn', 
+           'Saa3', "Mt1", "Tgfb1", "Ccl2", "Cxcl5")
+
+
+seurat.obj <- read_rds(here("Data", "seurat_Fibr.rds"))
+seurat.obj <- NormalizeData(seurat.obj, assay = "RNA", normalization.method = "CLR")
+
+
+seurat.obj %>% 
+  GetAssayData( slot = "data", assay = "RNA")%>% 
+#  as.matrix() %>%
+  t() %>% 
+  as.data.frame() %>% 
+  as_tibble(rownames = "cellcode") %>% 
+  select(one_of(c("cellcode", genes))) -> expression.data
+
+expression.data
+```
+
+Join with coordinates.
+
+```{r prep_for_plot}
+expression.data %>% 
+  right_join(coords) %>% 
+  pivot_longer(cols = -c("sc.y", "sc.x", "cellcode"), names_to = "gene", values_to = "norm_umi") -> for.plot
+```
+
+
+Cap the normalized UMI counts at `2` to make a nicer visualization, and plot.
+
+```{r 2d_genes, fig.width=8, fig.asp=.8}
+for.plot %>% 
+  mutate(norm_umi = ifelse(norm_umi > 1.5, 1.5, norm_umi)) %>% 
+  group_by(gene) %>% 
+  arrange(norm_umi) %>% 
+    ggplot( aes(x=sc.x, y=sc.y, color = norm_umi))+ 
+      geom_point(size = 0.3)+
+      scale_color_gradient2(low= "dodgerblue3", high= "red3", mid= "white", midpoint = 0)+
+      theme_classic()+
+      facet_wrap(~gene)
+
+ggsave(filename = here("Figs", "caf", "general_2d_proj_genes.pdf"), width = 8, height = 7, useDingbats = F)
+```
+
+## Cell counts in experiment
+
+Plot the number of cells in each MetaCell. 
+
+
+```{r cell_counts, }
+mc@mc %>% 
+  enframe(name = "cellcode", value = "MetaCell") %>% 
+  mutate(MetaCell = as.factor(MetaCell)) %>% 
+    ggplot(aes(x = MetaCell, fill = MetaCell))+
+      geom_bar(stat = "count")+
+      theme_classic()+
+      theme(legend.position = "none")
+
+ggsave(filename = here("Figs", "caf", "general_cell_counts.pdf"), width = 4,height = 2, scale = 1.2)
+```
+
+
+## MetaCell composition
+
+We profiled 3 QPCTL-KO TMEs and 3 QPCTL-WT TMEs. Plot the sample composition of each MetaCell. The hashtag info is in the mat object.
+
+```{r get_hashtags}
+mat.obj <- scdb_mat("QPCTL_exp_Fibr")
+
+mat.obj@cell_metadata %>% 
+  select(new_hash.ID) %>% 
+  as_tibble(rownames = "cellcode") %>% 
+  filter(str_detect(new_hash.ID, "HTO")) %>% 
+  mutate(sample = fct_recode(new_hash.ID, WT_1 = "HTO1", WT_2 = "HTO2", WT_3 = "HTO3",
+                                          KO_1 = "HTO4", KO_2 = "HTO5", KO_3 = "HTO6")) -> hashtags
+
+hashtags
+```
+
+Combine with MetaCells and normalize within samples. 
+
+```{r calc_composition}
+mc@mc %>% 
+  enframe(name = "cellcode", value = "MetaCell") %>% 
+  inner_join(hashtags) %>% 
+  count(MetaCell, sample) %>%
+  group_by(sample)%>%
+  mutate(normalized.count = (n/sum(n))*1000 ) %>% 
+  mutate(MetaCell = as.factor(MetaCell) ) -> sample.counts
+
+sample.counts
+```
+
+And plot
+
+```{r plot_composition}
+ggplot(sample.counts, aes(fill = sample, y=normalized.count, x=MetaCell)) + 
+  geom_bar( stat="identity", position = "fill")+
+  scale_fill_manual(values=c("#2F4F4F", "#528B8B", "#B4CDCD", "#CD5555","#A52A2A", "#8B2323"))+
+  theme(legend.title = element_blank())
+
+ggsave(filename = here("Figs", "caf", "general_sample_compostition.pdf"), width = 4, height = 3, useDingbats=FALSE)
+```
+
+
+
