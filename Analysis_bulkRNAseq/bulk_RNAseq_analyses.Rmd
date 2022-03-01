@@ -1,0 +1,771 @@
+---
+title: "Analysis bulk RNAseq data"
+author: "Kaspar Bresser"
+date: "20/10/2021"
+output: 
+  github_document:
+    toc: true
+  html_document: 
+    theme: simplex
+    highlight: pygments
+#    code_folding: show
+    self_contained: TRUE
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message=FALSE,
+                      autodep  = TRUE,
+                      cache = FALSE,
+                      fig.width = 5,
+                      fig.asp = 0.618,
+                      fig.align = "center")
+```
+
+Below are all analyses I performed for the bulk RNAseq data from the manuscript. RNAseq data was obtained from several organs at steady state, plus the FACS sorted CD45-negative compartment of established B16F10 tumors. 
+
+Reads were aligned to the pre-built GRCm38 genome_snp_tran reference using HISAT250, and transcript counts were obtained using an in-house generated pipeline [GenSum](https://github.com/NKI-GCF/gensum)
+
+
+Import the required packages
+
+
+```{r loading, echo=FALSE}
+library(edgeR)
+library(ggfortify)
+library(pheatmap)
+library(tidyverse)
+library(igraph)
+library(RColorBrewer)
+library(tidytext)
+library(httr)
+library(ggrepel)
+library(ggpubr)
+library(rstatix)
+library(msigdbr)
+library(here)
+```
+
+
+Import the RNAseq dataframe. All samples are in this table.
+
+```{r import_data}
+(rna.data <- read_tsv(file = "./Data/all_gene_counts_bulkRNA_QPCTL.tsv", col_types = cols(chromosome_name = "c")))
+
+names(rna.data)
+```
+
+
+
+## Organs at steady state
+
+### Subset and tidy data
+
+Lets first take a look at the transcriptomes of the organs at steady state. Select those columns, plus the external gene identifier, and remove rows that contain `NA`.
+
+```{r select_organs}
+rna.data %>% 
+  dplyr::select( c(contains(c( "external_gene_id")), 2:25) ) %>% 
+  na.omit() -> steady.state.data 
+
+steady.state.data
+```
+
+Next, trash rows that have no reads, and in case of double gene_ids, select the one with the highest read-count
+
+```{r filter_steady}
+steady.state.data %>% 
+  mutate(sum_counts = rowSums(dplyr::select(.,2:25)) ) %>% 
+  filter(sum_counts > 0 ) %>% 
+  group_by(external_gene_id) %>%
+  top_n(1, sum_counts) -> steady.state.data
+
+steady.state.data
+```
+
+Simplify the column names.
+
+```{r simplify_steady}
+steady.state.data %>% 
+  setNames(str_remove(names(.), "\\d+$")) %>% 
+  setNames(str_replace(names(.), "Sample_6362_", "S")) %>% 
+  column_to_rownames("external_gene_id") -> steady.state.data
+
+head(steady.state.data)
+```
+
+Use the `EdgeR` package to get a counts per million table. 
+
+```{r get_CPM}
+DGE.object <- DGEList(counts = steady.state.data[1:24], 
+                      genes = rownames(steady.state.data))
+
+countsPerMillion <- as.data.frame(cpm(DGE.object) )
+```
+
+
+### PCA
+
+Lets look at the variance between the samples using a PCA. We estimate the variance for each row in the  matrix and select the 1000 most variable genes
+
+```{r variance_steady}
+var_genes <- apply(countsPerMillion, 1, var)
+head(var_genes)
+
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:1000]
+countsPerMillion <- countsPerMillion[select_var, ]
+```
+
+Perform PCA using these genes. 
+
+```{r PCA_steady}
+countsPerMillion %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  prcomp(center = T, scale = T) -> pca
+
+str(pca)
+```
+
+And make the plot.
+
+```{r plot_PCA_steady, fig.asp=.8}
+as.data.frame(pca$x) %>% 
+  mutate(organ = as.factor(c( rep("LN", 8), rep("Spleen", 8), rep("BM", 8) )),
+         genotype = as.factor(rep( c("WT","WT","WT","WT","KO","KO","KO","KO"), 3 ))) %>% 
+  ggplot(aes(x = PC1, y = PC2, group = organ))+
+  geom_point( aes(shape=organ, color=genotype), size = 2 )+
+  ggtitle("PCA 1000 most variable genes")+
+  theme_classic()
+
+ggsave("./Figs/steady_state_PCA.pdf",  width = 2.5, height = 2, useDingbats = F, scale = 1.5)
+
+pca$x[,c(1,2)] %>% 
+  as.data.frame() %>% 
+  as_tibble(rownames = "sample") %>% 
+  write_tsv( "./Output/steady_state_PCA.tsv")
+```
+
+### Heatmap
+
+Get log-transformed CPM values, and select the 250 most variable genes. 
+
+```{r prep_heat_steady}
+countsPerMillion <- cpm(DGE.object, log = T)
+
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:250]
+countsPerMillion <- countsPerMillion[select_var,]
+```
+
+Set annotations for the heatmap.
+
+```{r annot_steady}
+annotation <- data.frame( organ = as.factor(c( rep("LN", 8), rep("Spleen", 8), rep("BM", 8) )),
+                          genotype = as.factor(rep( c("WT","WT","WT","WT","KO","KO","KO","KO"), 3 )) )
+rownames(annotation) <- colnames(countsPerMillion) 
+
+annotation
+```
+
+
+```{r heatmap_steady, fig.width=8}
+pheatmap(countsPerMillion, scale = "row",breaks = seq(-1.5,1.5,by=0.03), 
+         clustering_distance_cols = "euclidean" , annotation_col = annotation, show_rownames = F,
+         border_color = NA, clustering_distance_rows = "manhattan", main = "250 most variable genes")
+
+countsPerMillion %>% 
+  as_tibble(rownames = "gene") %>% 
+  write_tsv("./Output/steady_state_heatmap.tsv")
+```
+
+
+
+## DE analysis CD45-negative cells
+
+### Subset and tidy
+
+filter like above, but now for the CD45-negative samples, sorted from the tumor samples. These columns are annotated with "Tum". 
+
+Trash rows that have no reads, and in case of double gene_ids, select the one with the highest read-count.
+
+Simplify column names.
+
+Also remove sample 4, as sequencing quality was very low for this sample. 
+
+```{r filter_prep}
+rna.data %>% 
+  na.omit() %>% 
+  dplyr::select(contains(c("Tum", "external"))) %>% 
+  mutate(sum_counts = rowSums(dplyr::select(.,1:12)) ) %>% 
+  filter(sum_counts > 0 ) %>% 
+  group_by(external_gene_id) %>%
+  top_n(1, sum_counts) %>% 
+  setNames(str_remove(names(.), "\\d+$")) %>% 
+  setNames(gsub(pattern = "Sample_6362_", replacement = "S", x = names(.))) %>% 
+  dplyr::select(-S40_Tum) %>% 
+  column_to_rownames("external_gene_id") -> tumor.data
+
+head(tumor.data)
+```
+
+
+### DGE testing
+
+Create grouping factor for DGE object and make the DGE object.
+
+```{r prepDGE1}
+group <- factor(c("WT","WT","WT","WT","WT","KO","KO" ,"KO","KO","KO","KO"),levels = c("WT", "KO"))
+
+DGE.object <- DGEList(counts = tumor.data[1:11], 
+                      group = group,
+                      genes = rownames(tumor.data))
+
+```
+
+Get CPM tranformed reads, make logicle matrix to check cpm threshold at 1.5, and summarize the number of genes that are reliably detected above this threshold for multiple samples.
+
+```{r prepDGE2}
+countsPerMillion <- as.data.frame(cpm(DGE.object))
+
+thresh <- countsPerMillion > 1.5
+head(thresh)
+
+table(rowSums(thresh))
+```
+
+We will keep genes for which at least 7 samples have > 1.5 cpm (11340 genes in total)
+
+```{r prepDGE3}
+summary(rowSums(thresh) >= 7)
+
+DGE.object <- DGE.object[rowSums(thresh) >= 7, , keep.lib.sizes=FALSE]
+```
+
+Prepare for DGE testing.
+
+```{r prepDGE4}
+# Calculate sample normalization factors
+DGE.object <- calcNormFactors(DGE.object)
+DGE.object$samples
+
+# Set design for comparison
+design <- model.matrix(~ 1 + group)
+
+# Estimate dispersions
+DGE.object <- estimateDisp(DGE.object, design, robust=TRUE)
+```
+
+Sample distance plot
+
+```{r sample_distance, fig.asp=.8}
+plotMDS(DGE.object)
+```
+
+Perform DE (quasi-likelyhood) test and make MD-plot.
+
+```{r DE_test, fig.asp=.6, fig.width=7}
+fit <- glmQLFit(DGE.object, design)
+qlf <- glmQLFTest(fit, coef=2)
+
+plotMD(qlf)
+```
+
+Get results, perform FDR correction for P values, and write data. 
+
+```{r get_results}
+qlf$table %>% 
+  as_tibble(rownames = "gene") %>% 
+  mutate(FDR = p.adjust(PValue, method = "fdr")) -> DE.results
+
+DE.results
+
+write_tsv(x = DE.results, file = "./Output/tumor_DE_results.tsv" )
+```
+
+
+### Volcano plot
+
+annotate significant genes and arrange genes. We'll mark genes with and FDR of < 0.05 and label ones that are < 0.01
+
+```{r annot_volcano}
+DE.results %>% 
+  mutate(sig =  FDR < 0.05, lab = FDR < 0.01 ) %>% 
+  arrange(sig) -> to.plot
+
+```
+
+And make the plot
+
+```{r Volcano_plot, fig.asp=1.25, fig.width=5.5}
+ggplot(to.plot, aes( x = logFC, y = log10(FDR), color = sig, label = gene) ) + 
+  geom_point()+
+  scale_y_reverse()+
+  scale_color_manual(values=c("#c0c0c0", "red"))+
+  geom_text_repel(data = subset(to.plot, lab == TRUE ),box.padding = 1, max.overlaps = 15 )+
+  labs(title = "")+
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+  #  xlim(-0.4,0.6)+
+  geom_vline(xintercept = 0, linetype ="dotted")+
+  geom_hline(yintercept = log10(0.05), linetype ="dotted")
+
+ggsave("./Figs/tumor_Volcano.pdf",  width = 4, height = 6, useDingbats = F)
+```
+
+
+### Gene-sets
+
+#### Cell cycle
+
+Investigate cell cycle related gene-expression in the data. Download pathways from MSigDB using the `msigdbr` package.
+
+```{r get_pathways}
+pathways <- msigdbr(species = "Mus musculus", category = "H")
+```
+
+Join with DE results.
+
+```{r join_data}
+pathways %>% 
+  select(gene_symbol, gs_name) %>% 
+  rename(gene = gene_symbol) %>% 
+  inner_join(DE.results) -> DE.results.path
+
+DE.results.path
+```
+
+Focus on cell cycle related genes, filter for significant genes, and plot waterfalls. 
+
+```{r waterfalls, fig.width=9, fig.asp=.8}
+paths <- c("HALLMARK_MYC_TARGETS_V1", "HALLMARK_MYC_TARGETS_V2", 
+           "HALLMARK_MITOTIC_SPINDLE", "HALLMARK_G2M_CHECKPOINT", 
+           "HALLMARK_E2F_TARGETS")
+
+DE.results.path %>% 
+  filter(gs_name %in% paths) %>% 
+  filter(PValue < 0.05) %>% 
+  mutate(gene = reorder_within(x = gene, by = logFC, within = gs_name)) %>% 
+    ggplot(aes(x = gene, y = logFC, fill=logFC > 0))+
+      geom_bar(stat="identity")+ 
+      facet_wrap(~gs_name, scales = "free")+
+      coord_flip()+
+      scale_x_reordered()+
+      theme_minimal()+
+      theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+
+      scale_fill_manual(values=c("darkblue", "darkred"))
+  
+
+DE.results.path %>% 
+  filter(gs_name %in% paths) %>% 
+  filter(PValue < 0.05) %>% 
+  write_tsv("./Output/tumor_cell_cycle_waterfalls.tsv")
+```
+
+Can also calculate signature sums per sample and plot those. First subset and tidy data. 
+
+```{r prep_cc}
+countsPerMillion %>% 
+  as_tibble(rownames = "gene") %>% 
+  inner_join(pathways, by = c("gene" = "gene_symbol")) %>% 
+  filter(gs_name %in% paths) %>% 
+  pivot_longer(cols = contains("Tum"), names_to = "sample", values_to = "cpm") %>% 
+  select(gene, sample, gs_name, cpm) -> cpm.data
+
+cpm.data
+```
+
+Add grouping and calculate sums.
+
+```{r calc_sums}
+cpm.data %>% 
+  mutate(group = factor(case_when(sample %in% colnames(countsPerMillion)[1:5] ~ "WT",
+                                    TRUE ~ "KO"), 
+                        levels = c("WT", "KO"))) %>% 
+  group_by(group, sample, gs_name) %>% 
+  summarise(signature_sum = sum(cpm)) -> cpm.data
+
+write_tsv(cpm.data, "./Output/tumor_cell_cycle_boxplots.tsv")
+```
+
+calculate P values.
+
+```{r calc_P_cc}
+cpm.data %>% 
+  group_by(gs_name) %>%
+  tukey_hsd(signature_sum ~ group ) %>%
+  add_significance("p.adj") %>% 
+  add_xy_position(fun = "max", x = "group", dodge = 0.8, scales = "free") %>%
+  mutate(p.adj = round(p.adj, 4))  -> stat.test
+
+stat.test
+```
+
+And make the plot
+
+```{r plot_cc_box, fig.width=7.5, fig.asp=.9}
+ggplot(cpm.data, aes(x = group, y = signature_sum, color = group))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(width = 0.1, color = "black", size = 2)+
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5))+   
+  facet_wrap(~gs_name, scale = "free_y", nrow = 2)+
+  stat_pvalue_manual(data = stat.test,  label = "p.adj", 
+                     tip.length = 0.01,hide.ns = F, label.size = 4 )+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))+
+  theme_classic()
+```
+
+#### melanogenisis
+
+Now lets check expression of genes involved in melanogenisis. Filter for those genes, and tidy data.
+
+```{r tidy_mel}
+mel.genes <- c("Tyrp1", "Tyr", "Dct", "Mitf", "Trpm1","Met", "Mlana","Pmel", "Gpnmb","Mc1r")
+
+countsPerMillion %>% 
+  as_tibble(rownames = "gene") %>% 
+  filter(gene %in% mel.genes) %>% 
+  pivot_longer(cols = -gene, names_to = "sample", values_to = "cpm") %>% 
+  mutate(group = factor(case_when(sample %in% colnames(countsPerMillion)[1:5] ~ "WT",
+                                    TRUE ~ "KO"), 
+                        levels = c("WT", "KO")))  -> mel.data 
+
+write_tsv(mel.data, "./Output/tumor_melano_boxplots.tsv")
+```
+
+Calculate statistics
+
+```{r stats_mel}
+mel.data %>% 
+  group_by(gene) %>%
+  tukey_hsd(cpm ~ group ) %>%
+  add_xy_position(fun = "max", x = "group", dodge = 0.8, scales = "free") %>%
+  mutate(p.adj = round(p.adj, 4))  -> stat.test
+
+stat.test
+```
+
+And plot
+
+```{r box_mel, fig.width=7.5, fig.asp=.9}
+ggplot(mel.data, aes(x = group, y = cpm))+
+  geom_boxplot(aes(color = group), outlier.shape = NA)+
+  geom_jitter(width = 0.05, color = "black", size = 1)+
+  facet_wrap(~gene, nrow = 2, scales = "free_y")+
+  stat_pvalue_manual(data = stat.test,  label = "p.adj", 
+                     tip.length = 0.01,hide.ns = F, label.size = 4 )+
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))+
+  theme_classic()
+```
+
+
+### stringDB analysis
+
+Finally, we can check if there are any interesting gene-networks in our DE data, I'll do this by querying the [stringDB](https://string-db.org). 
+
+Will use `httr` package to query stringDB.
+
+Set up parameters needed for query
+
+
+```{r select_genes}
+#Species ID, mouse is 10090, human is 9606
+species <- "10090"
+
+# set-up genes to search
+DE.results %>% 
+  filter(FDR < 0.05) %>% 
+  pull(gene) -> genes
+
+# number of maximum nodes to return
+n.nodes <- 25
+```
+
+paste genes to search together and make API
+
+```{r make_api}
+genes.search <- paste0(genes, collapse = "%0d")
+api <- paste0("https://string-db.org/api/tsv/network?identifiers=", genes.search,"&species=",species , collapse = "")
+
+api
+```
+
+Store search in vector and extract content
+
+```{r search_string}
+stringDB.results <- GET(api)
+stringDB.results <- content(stringDB.results)
+
+stringDB.results
+
+write_tsv(stringDB.results, "./Output/tumor_DEgenes_stringDB.tsv")
+```
+
+Reshape data to obtain a two-column tibble containing the linkage. 
+
+```{r get_linkage}
+stringDB.results %>% 
+  mutate(link_id = 1:n()) %>% 
+  dplyr::select(contains(c("string", "preferred")), link_id) %>% 
+  pivot_longer(cols = -link_id, names_to = "ID", values_to = "gene") %>% 
+  separate(col = ID, into = c("ID", "link")) %>% 
+  pivot_wider(names_from = ID, values_from = gene) %>% 
+  transmute(stringID = stringId, GeneID = preferredName) %>% 
+  distinct() -> linkage
+
+linkage
+```
+
+Extract the edges, and create the net using the `igraph` package
+
+```{r make_net}
+stringDB.results %>% 
+  dplyr::select(stringId_A, stringId_B, score) -> edges.plot
+
+
+net <- graph_from_data_frame(d = edges.plot, 
+                             vertices = linkage, 
+                             directed = T)
+class(net)
+```
+
+
+Now create a color vector based on the DE results to use with the net. 
+
+```{r get_colors}
+values <- DE.results$logFC
+
+# set colors
+# Use n equally spaced breaks to assign each value to n-1 equal sized bins 
+ii <- cut(values, breaks = seq(min(values), max(values), len = 100), 
+          include.lowest = TRUE)
+
+# Use bin indices, ii, to select color from vector of n-1 equally spaced colors
+colors <- colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(99)[ii]
+
+str(colors)
+```
+
+
+Then add gene names and filter the color vector for genes that are in the network (i.e. in the linkage table)
+
+```{r finalize_colors}
+# add gene names to color vector
+names(colors) <- DE.results$gene
+
+# check if anything is not included and add the as grey colors
+setdiff(linkage$GeneID, DE.results$gene)
+(not.included <- setdiff(linkage$GeneID, DE.results$gene))
+to.add <- rep("darkgrey", length(not.included))
+names(to.add) <- not.included
+colors <- c(colors, to.add)
+
+# Only keep colors that are in the linkage, i.e. in the Net
+colors <- (colors[names(colors) %in% linkage$GeneID])
+
+# Sort colors to match net
+colors <- colors[V(net)$GeneID]
+
+
+colors
+```
+
+
+Now we can plot the network.
+
+```{r fig.width=15}
+# set colors to the Net
+V(net)$color <- colors
+
+# scale edges
+E(net)$width <- E(net)$score * 6
+
+
+plot(net, edge.arrow.size=0,vertex.label = V(net)$GeneID, vertex.size = 15,
+     vertex.label.color = "black", vertex.label.font = 2,vertex.label.cex = .9,
+     layout=layout_with_fr, edge.curved=0, )
+```
+
+
+## Clustering analysis
+
+### Heatmap 
+
+Instead of looking at the DE data, we can also perform a clustering analysis on the RNAseq data, and see if we find anything there
+
+Get a log-transformed cpm table form the DGE object, and select the top 250 most variable genes. 
+
+
+```{r select_var}
+cpm.table <- as.data.frame(cpm(DGE.object, log = T))
+
+var.genes <- apply(cpm.table, 1, var)
+
+select.var <- names(sort(var.genes, decreasing=TRUE))[1:250]
+cpm.table <- cpm.table[select.var,]
+```
+
+perform hierarchical clustering.
+
+```{r cluster, fig.width=7}
+cpm.table %>% 
+  # transpose the matrix so genes are as columns
+  t() %>% 
+  # apply scaling to each column of the matrix (genes)
+  scale() %>% 
+  # transpose back so genes are as rows again
+  t() %>% 
+  dist() %>% 
+  hclust(method = "complete") -> gene.hclust
+
+plot(gene.hclust, labels = FALSE)
+```
+
+There appear to be 4 main clusters. Use these to create row annotations for the heatmap.
+
+```{r row_annot}
+cutree(gene.hclust, k = 4) %>% 
+  enframe() %>% 
+  transmute(gene = name, cluster = as.factor(value)) %>% 
+  column_to_rownames("gene") -> gene.cluster
+
+```
+
+
+Set column annotations for heatmap
+
+```{r annots_hm}
+annotation <- data.frame( genotype = c(rep("WT", 5),rep("KO", 6)) )
+rownames(annotation) <- colnames(cpm.table)
+
+annotation
+```
+
+And make the heatmap.
+
+```{r heatmap_tum, fig.width=7.5}
+pheatmap(cpm.table, scale = "row",breaks = seq(-1.5,1.5,by=0.03), 
+         clustering_distance_cols = "euclidean" , annotation_col = annotation, show_rownames = F,
+         border_color = NA, cutree_rows = 4, annotation_row = gene.cluster)
+```
+
+### StringDB cluster 2
+
+Cluster 2 appears enriched in KO tumors. Lets perform a string query for those genes
+
+```{r get_genes_clust}
+gene.cluster %>% 
+  rownames_to_column("gene") %>% 
+  filter(cluster == 2) %>% 
+  pull(gene) -> genes
+```
+
+
+paste genes to search together and make API
+
+```{r make_api2}
+genes.search <- paste0(genes, collapse = "%0d")
+api <- paste0("https://string-db.org/api/tsv/network?identifiers=", genes.search,"&species=",species , collapse = "")
+
+api
+```
+
+Store search in vector and extract content
+
+```{r search_string2}
+stringDB.results <- GET(api)
+stringDB.results <- content(stringDB.results)
+
+stringDB.results
+
+write_tsv(stringDB.results, "./Output/tumor_cluster2_stringDB.tsv")
+```
+
+
+Reshape data to obtain a two-column tibble containing the linkage. 
+
+```{r get_linkage2}
+stringDB.results %>% 
+  mutate(link_id = 1:n()) %>% 
+  dplyr::select(contains(c("string", "preferred")), link_id) %>% 
+  pivot_longer(cols = -link_id, names_to = "ID", values_to = "gene") %>% 
+  separate(col = ID, into = c("ID", "link")) %>% 
+  pivot_wider(names_from = ID, values_from = gene) %>% 
+  transmute(stringID = stringId, GeneID = preferredName) %>% 
+  distinct() -> linkage
+
+linkage
+```
+
+Extract the edges, and create the net using the `igraph` package
+
+```{r make_net2}
+stringDB.results %>% 
+  dplyr::select(stringId_A, stringId_B, score) -> edges.plot
+
+
+net <- graph_from_data_frame(d = edges.plot, 
+                             vertices = linkage, 
+                             directed = T)
+class(net)
+```
+
+
+Now create a color vector based on the DE results to use with the net. 
+
+```{r get_colors2}
+values <- DE.results$logFC
+
+# set colors
+# Use n equally spaced breaks to assign each value to n-1 equal sized bins 
+ii <- cut(values, breaks = seq(min(values), max(values), len = 100), 
+          include.lowest = TRUE)
+
+# Use bin indices, ii, to select color from vector of n-1 equally spaced colors
+colors <- colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(99)[ii]
+
+str(colors)
+```
+
+
+Then add gene names and filter the color vector for genes that are in the network (i.e. in the linkage table)
+
+```{r finalize_colors2}
+# add gene names to color vector
+names(colors) <- DE.results$gene
+
+# check if anything is not included and add the as grey colors
+setdiff(linkage$GeneID, DE.results$gene)
+(not.included <- setdiff(linkage$GeneID, DE.results$gene))
+to.add <- rep("darkgrey", length(not.included))
+names(to.add) <- not.included
+colors <- c(colors, to.add)
+
+# Only keep colors that are in the linkage, i.e. in the Net
+colors <- (colors[names(colors) %in% linkage$GeneID])
+
+# Sort colors to match net
+colors <- colors[V(net)$GeneID]
+
+
+colors
+```
+
+
+Now we can plot the network.
+
+```{r plotnet, fig.width=15}
+# set colors to the Net
+V(net)$color <- colors
+
+# scale edges
+E(net)$width <- E(net)$score * 6
+
+
+plot(net, edge.arrow.size=0,vertex.label = V(net)$GeneID, vertex.size = 15,
+     vertex.label.color = "black", vertex.label.font = 2,vertex.label.cex = .9,
+     layout=layout_with_fr, edge.curved=0 )
+```
